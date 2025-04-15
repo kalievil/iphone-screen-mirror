@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AirMirror Screen Sharing</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      padding: 20px;
+      max-width: 500px;
+      margin: 0 auto;
+      color: #333;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      width: 100%;
+      margin-bottom: 20px;
+    }
+    input, button {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      border-radius: 8px;
+      font-size: 1rem;
+    }
+    input {
+      border: 1px solid #ddd;
+    }
+    button {
+      background: #0070f3;
+      color: white;
+      border: none;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:disabled {
+      background: #ccc;
+    }
+    #status {
+      margin: 20px 0;
+      padding: 15px;
+      border-radius: 8px;
+      background: #f8f9fa;
+      text-align: center;
+    }
+    .status-connected {
+      background: #d4edda !important;
+      color: #155724;
+    }
+    .status-error {
+      background: #f8d7da !important;
+      color: #721c24;
+    }
+    .logo {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 20px;
+      display: block;
+    }
+    .spinner {
+      border: 3px solid rgba(0, 0, 0, 0.1);
+      border-top: 3px solid #0070f3;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px;
+      display: none;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .ios-instructions {
+      background: #fff3cd;
+      color: #856404;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 20px;
+      text-align: left;
+    }
+    .ios-instructions h3 {
+      margin-top: 0;
+    }
+    .ios-instructions ol {
+      padding-left: 20px;
+    }
+    #videoPreview {
+      width: 100%;
+      max-width: 300px;
+      height: auto;
+      background: #000;
+      border-radius: 8px;
+      margin-top: 20px;
+      display: none;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="https://cdn-icons-png.flaticon.com/512/685/685681.png" alt="AirMirror" class="logo">
+    <h1>AirMirror Screen Sharing</h1>
+    
+    <div class="card">
+      <input type="text" id="roomCode" placeholder="Enter room code from Chrome extension" maxlength="6">
+      <button id="connectButton">Connect</button>
+      <button id="startCameraButton" class="hidden">Start Camera Instead</button>
+    </div>
+    
+    <video id="videoPreview" autoplay muted playsinline></video>
+    
+    <div id="status">Enter the room code from your Chrome extension</div>
+    
+    <div id="iosInstructions" class="ios-instructions hidden">
+      <h3>iPhone Screen Sharing Instructions</h3>
+      <p>Screen sharing on iOS requires using the camera instead:</p>
+      <ol>
+        <li>Click "Start Camera Instead" above</li>
+        <li>Grant permission to use your camera</li>
+        <li>Point your camera at whatever you want to share</li>
+      </ol>
+    </div>
+  </div>
+  
+  <script>
+    const roomCodeInput = document.getElementById('roomCode');
+    const connectButton = document.getElementById('connectButton');
+    const startCameraButton = document.getElementById('startCameraButton');
+    const statusElement = document.getElementById('status');
+    const videoPreview = document.getElementById('videoPreview');
+    const iosInstructions = document.getElementById('iosInstructions');
+    
+    let peer;
+    let connection;
+    let currentStream;
+    let isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    
+    // Check for room code in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const codeFromUrl = urlParams.get('code');
+    if (codeFromUrl) {
+      console.log('Room code from URL:', codeFromUrl);
+      roomCodeInput.value = codeFromUrl;
+    }
+    
+    // Add event listeners
+    connectButton.addEventListener('click', connectToPeer);
+    startCameraButton.addEventListener('click', startCameraSharing);
+    
+    // Connect to peer function
+    function connectToPeer() {
+      const roomCode = roomCodeInput.value.trim().toUpperCase();
+      if (!roomCode) {
+        updateStatus('Please enter a room code', 'error');
+        return;
+      }
+      
+      try {
+        updateStatus('Initializing connection...', 'pending');
+        
+        // Create PeerJS instance with explicit host config
+        peer = new Peer(`sender_${Date.now()}`, {
+          secure: true,
+          host: 'peerjs-server.herokuapp.com',
+          port: 443, 
+          debug: 3,
+          config: { 
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' }
+            ] 
+          }
+        });
+
+        console.log('Attempting to connect to peer:', roomCode);
+        
+        peer.on('open', async (id) => {
+          console.log('PeerJS connected with ID:', id);
+          updateStatus('PeerJS connected. ID: ' + id, 'pending');
+          
+          // Connect to the viewer peer
+          connection = peer.connect(roomCode);
+          console.log('Connecting to viewer:', roomCode);
+          
+          connection.on('open', () => {
+            console.log('Data connection established');
+            updateStatus('Connected to viewer. Ready to share.', 'connected');
+            
+            // Send device info
+            connection.send({
+              type: 'info',
+              name: 'My iPhone',
+              model: navigator.platform || 'iOS Device'
+            });
+            
+            // Show iOS-specific instructions if on iOS
+            if (isIOS) {
+              iosInstructions.classList.remove('hidden');
+              startCameraButton.classList.remove('hidden');
+              connectButton.disabled = true;
+            } else {
+              // Try screen sharing on non-iOS
+              startScreenSharing();
+            }
+          });
+          
+          connection.on('error', (err) => {
+            updateStatus(`Connection error: ${err.message}`, 'error');
+            cleanupConnection();
+          });
+          
+          connection.on('close', () => {
+            updateStatus('Connection closed.', 'error');
+            cleanupConnection();
+          });
+        });
+        
+        peer.on('error', (err) => {
+          updateStatus(`PeerJS error: ${err.type}`, 'error');
+          cleanupConnection();
+        });
+        
+      } catch (err) {
+        updateStatus(`Error: ${err.message}`, 'error');
+      }
+    }
+    
+    // Start screen sharing function
+    async function startScreenSharing() {
+      try {
+        updateStatus('Requesting screen sharing...', 'pending');
+        
+        // Try to get screen media
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+          video: true,
+          audio: true
+        });
+        
+        handleMediaStream(screenStream, 'screen');
+        
+      } catch (err) {
+        console.error('Screen sharing error:', err);
+        updateStatus('Screen sharing not supported on this device. Try camera instead.', 'error');
+        
+        // Show camera option as fallback
+        startCameraButton.classList.remove('hidden');
+      }
+    }
+    
+    // Start camera sharing function
+    async function startCameraSharing() {
+      try {
+        updateStatus('Requesting camera access...', 'pending');
+        
+        // Get camera stream
+        const cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+        
+        handleMediaStream(cameraStream, 'camera');
+        
+      } catch (err) {
+        console.error('Camera error:', err);
+        updateStatus(`Camera error: ${err.message}`, 'error');
+      }
+    }
+    
+    // Handle media stream (either screen or camera)
+    function handleMediaStream(stream, type) {
+      currentStream = stream;
+      
+      // Show preview
+      videoPreview.srcObject = stream;
+      videoPreview.style.display = 'block';
+      
+      updateStatus(`Connected and streaming (${type})!`, 'connected');
+      
+      // Hide buttons
+      startCameraButton.classList.add('hidden');
+      connectButton.disabled = true;
+      
+      // Call the peer
+      if (peer && connection) {
+        const call = peer.call(roomCodeInput.value.trim().toUpperCase(), stream);
+        
+        // Handle stream ending
+        stream.getTracks().forEach(track => {
+          track.onended = () => {
+            updateStatus(`${type.charAt(0).toUpperCase() + type.slice(1)} sharing ended.`, 'error');
+            videoPreview.style.display = 'none';
+            cleanupConnection();
+            connectButton.disabled = false;
+          };
+        });
+      }
+    }
+    
+    function updateStatus(message, type) {
+      statusElement.textContent = message;
+      statusElement.className = '';
+      
+      const spinner = document.querySelector('.spinner');
+      if (!spinner) {
+        const newSpinner = document.createElement('div');
+        newSpinner.className = 'spinner';
+        statusElement.parentNode.insertBefore(newSpinner, statusElement);
+      }
+      
+      if (type === 'connected') {
+        statusElement.classList.add('status-connected');
+        hideSpinner();
+      } else if (type === 'error') {
+        statusElement.classList.add('status-error');
+        hideSpinner();
+      } else if (type === 'pending') {
+        showSpinner();
+      }
+    }
+    
+    function showSpinner() {
+      const spinner = document.querySelector('.spinner');
+      if (spinner) {
+        spinner.style.display = 'block';
+      }
+    }
+    
+    function hideSpinner() {
+      const spinner = document.querySelector('.spinner');
+      if (spinner) {
+        spinner.style.display = 'none';
+      }
+    }
+    
+    function cleanupConnection() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+        currentStream = null;
+      }
+      
+      if (connection) {
+        connection.close();
+        connection = null;
+      }
+      
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+      
+      videoPreview.style.display = 'none';
+      startCameraButton.classList.remove('hidden');
+      connectButton.disabled = false;
+    }
+  </script>
+</body>
+</html> 
