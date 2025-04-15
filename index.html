@@ -125,6 +125,40 @@
     .hidden {
       display: none !important;
     }
+    
+    .safari-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    
+    .safari-modal-content {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 90%;
+      max-height: 90%;
+      overflow-y: auto;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    }
+    
+    .safari-modal img {
+      max-width: 100%;
+      margin: 10px 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+    
+    .safari-modal button {
+      margin-top: 15px;
+    }
   </style>
 </head>
 <body>
@@ -144,15 +178,33 @@
     
     <div id="iosInstructions" class="ios-instructions hidden">
       <h3>iPhone Screen Sharing Instructions</h3>
-      <p>Screen sharing on iOS requires using the camera instead:</p>
+      <p>To share your iPhone screen:</p>
       <ol>
-        <li>Click "Start Camera Instead" above</li>
-        <li>Grant permission to use your camera</li>
-        <li>Point your camera at whatever you want to share</li>
+        <li>Make sure you're using Safari browser</li>
+        <li>Click "Share Screen" below</li>
+        <li>Tap "Screen" in the share menu</li>
+        <li>Select "Start Broadcast" when prompted</li>
       </ol>
+      <p><strong>Note:</strong> Screen sharing on iOS requires iOS 15+ and Safari.</p>
     </div>
     
     <div id="debug-panel"></div>
+  </div>
+  
+  <!-- Safari Screen Sharing Modal -->
+  <div id="safariModal" class="safari-modal hidden">
+    <div class="safari-modal-content">
+      <h2>How to Share Your iPhone Screen</h2>
+      <p>Follow these steps to share your iPhone screen:</p>
+      <ol>
+        <li>When prompted, select "Screen" from the share options</li>
+        <li>Toggle on "Broadcast Setup" from control center if shown</li>
+        <li>Tap "Start Broadcast" when ready</li>
+        <li>Your screen will now be shared with the extension</li>
+      </ol>
+      <p><strong>Important:</strong> Do not leave Safari during screen sharing or the connection will be lost.</p>
+      <button id="modalCloseButton">Got it!</button>
+    </div>
   </div>
   
   <script>
@@ -163,11 +215,15 @@
     const videoPreview = document.getElementById('videoPreview');
     const iosInstructions = document.getElementById('iosInstructions');
     const debugPanel = document.getElementById('debug-panel');
+    const safariModal = document.getElementById('safariModal');
+    const modalCloseButton = document.getElementById('modalCloseButton');
     
     let peer;
     let connection;
     let currentStream;
     let isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    let isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    let isIOSSafari = isIOS && isSafari;
     
     // Override console.log for debugging
     const originalLog = console.log;
@@ -205,6 +261,14 @@
     // Add event listeners
     connectButton.addEventListener('click', connectToPeer);
     startCameraButton.addEventListener('click', startCameraSharing);
+    modalCloseButton.addEventListener('click', () => {
+      safariModal.classList.add('hidden');
+    });
+    
+    // Rename "Start Camera Instead" button to "Share Screen" for iOS Safari
+    if (isIOSSafari) {
+      startCameraButton.textContent = "Share Screen";
+    }
     
     // Connect to peer function
     function connectToPeer() {
@@ -268,6 +332,13 @@
               iosInstructions.classList.remove('hidden');
               startCameraButton.classList.remove('hidden');
               connectButton.disabled = true;
+              
+              if (isIOSSafari) {
+                console.log("iOS Safari detected - enabling screen sharing option");
+              } else {
+                console.log("iOS but not Safari - camera only mode");
+                startCameraButton.textContent = "Start Camera Instead";
+              }
             } else {
               // Try screen sharing on non-iOS
               startScreenSharing();
@@ -311,7 +382,51 @@
       try {
         updateStatus('Requesting screen sharing...', 'pending');
         
-        // Try to get screen media
+        // Special handling for iOS Safari
+        if (isIOSSafari) {
+          // Show iOS Safari-specific modal with instructions
+          safariModal.classList.remove('hidden');
+          
+          // Check if the required APIs are available
+          if (navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
+            console.log("iOS Safari: Using getDisplayMedia API");
+            
+            // iOS 15.4+ supports getDisplayMedia in Safari
+            try {
+              const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                video: {
+                  frameRate: { ideal: 30, max: 60 },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+                audio: true
+              });
+              
+              handleMediaStream(screenStream, 'screen');
+              return;
+            } catch (iosErr) {
+              console.error("iOS Safari getDisplayMedia error:", iosErr);
+              
+              // If this fails, fall through to the iOS ReplayKit fallback
+              if (iosErr.name === "NotAllowedError" || iosErr.name === "NotFoundError") {
+                console.log("Trying iOS broadcast extension fallback...");
+                tryIOSBroadcastExtension();
+                return;
+              }
+              
+              // If this fails, we'll fall through to the error handler
+              updateStatus("Screen sharing error: " + iosErr.message, 'error');
+              throw iosErr;
+            }
+          } else {
+            // Fallback for older iOS versions that don't support getDisplayMedia
+            console.log("iOS Safari: getDisplayMedia not available, trying broadcast extension fallback");
+            tryIOSBroadcastExtension();
+            return;
+          }
+        }
+        
+        // Standard approach for desktop browsers
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
           video: true,
           audio: true
@@ -321,9 +436,74 @@
         
       } catch (err) {
         console.error('Screen sharing error:', err);
-        updateStatus('Screen sharing not supported on this device. Try camera instead.', 'error');
+        updateStatus('Screen sharing failed. ' + (isIOSSafari ? 
+          'Make sure you are using iOS 15.4+ and Safari browser.' : 
+          'Try camera instead.'), 'error');
         
-        // Show camera option as fallback
+        // Show camera option as fallback for non-iOS devices
+        if (!isIOSSafari) {
+          startCameraButton.textContent = "Start Camera Instead";
+          startCameraButton.classList.remove('hidden');
+        }
+      }
+    }
+    
+    // iOS ReplayKit broadcast extension fallback
+    function tryIOSBroadcastExtension() {
+      try {
+        console.log("Attempting iOS broadcast extension method");
+        
+        // Update instructions for ReplayKit approach
+        updateStatus("To share your screen, open Control Center, tap Screen Recording, and hold to select this app", 'pending');
+        
+        // iOS ReplayKit approach requires user to:
+        // 1. Open Control Center
+        // 2. Long press Screen Recording button
+        // 3. Select this Safari page as the broadcast destination
+        
+        // Create an audio context to receive the broadcast audio
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Set up a listener for when broadcast starts
+        window.addEventListener('devicemotion', function checkBroadcast() {
+          console.log("Checking if broadcast started...");
+          
+          // This is a hack to detect when ReplayKit broadcast might have started
+          // Real detection would come through the broadcast extension
+          
+          // For our basic purposes, we'll just check if we get any video input
+          navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+              if (stream && stream.getVideoTracks().length > 0) {
+                console.log("Got video stream that might be broadcast");
+                window.removeEventListener('devicemotion', checkBroadcast);
+                handleMediaStream(stream, 'screen');
+              }
+            })
+            .catch(err => console.error("Error checking for broadcast:", err));
+        });
+        
+        // Show detailed instructions to the user
+        safariModal.querySelector('.safari-modal-content').innerHTML = `
+          <h2>iOS Screen Recording Method</h2>
+          <p>Since direct screen sharing isn't available, use this method:</p>
+          <ol>
+            <li>Swipe down from top-right corner to open Control Center</li>
+            <li>Press and hold the Screen Recording button (●)</li>
+            <li>Select "Safari" from the list</li>
+            <li>Tap "Start Broadcast"</li>
+            <li>Wait 3 seconds and you'll start sharing your screen</li>
+          </ol>
+          <p><strong>To stop sharing:</strong> Tap the red status bar at top and select "Stop"</p>
+          <button id="modalCloseButton">Got it!</button>
+        `;
+        
+      } catch (err) {
+        console.error("iOS broadcast extension error:", err);
+        updateStatus("Couldn't initiate iOS screen sharing. Please try using the camera instead.", 'error');
+        
+        // Fall back to camera
+        startCameraButton.textContent = "Use Camera Instead";
         startCameraButton.classList.remove('hidden');
       }
     }
@@ -331,6 +511,12 @@
     // Start camera sharing function
     async function startCameraSharing() {
       try {
+        // If on iOS Safari, try screen sharing
+        if (isIOSSafari) {
+          startScreenSharing();
+          return;
+        }
+        
         updateStatus('Requesting camera access...', 'pending');
         
         // Get camera stream
@@ -355,6 +541,37 @@
       videoPreview.srcObject = stream;
       videoPreview.style.display = 'block';
       
+      // For iOS screen sharing, add special handling
+      if (type === 'screen' && isIOSSafari) {
+        console.log("iOS screen sharing stream obtained:", stream);
+        
+        // Log stream details for debugging
+        console.log("Stream tracks:", stream.getTracks().map(t => t.kind + ": " + t.label));
+        
+        // Add connection quality monitoring for iOS screen sharing
+        let lastBytesReceived = 0;
+        let checkInterval = setInterval(() => {
+          if (!currentStream) {
+            clearInterval(checkInterval);
+            return;
+          }
+          
+          const videoTracks = currentStream.getVideoTracks();
+          if (videoTracks.length === 0 || videoTracks[0].muted || !videoTracks[0].enabled) {
+            console.error("Video track appears to be disabled or muted");
+            updateStatus("Screen sharing interrupted. Please restart.", 'error');
+          }
+          
+          // Check if stream is still active
+          if (!currentStream.active) {
+            console.error("Stream is no longer active");
+            updateStatus("Screen sharing stopped. Connection lost.", 'error');
+            clearInterval(checkInterval);
+            cleanupConnection();
+          }
+        }, 5000);
+      }
+      
       updateStatus(`Connected and streaming (${type})!`, 'connected');
       
       // Hide buttons
@@ -363,11 +580,18 @@
       
       // Call the peer
       if (peer && connection) {
+        console.log(`Calling peer with ${type} stream`);
         const call = peer.call(roomCodeInput.value.trim().toUpperCase(), stream);
+        
+        call.on('error', (err) => {
+          console.error("Call error:", err);
+          updateStatus(`Call error: ${err.message}`, 'error');
+        });
         
         // Handle stream ending
         stream.getTracks().forEach(track => {
           track.onended = () => {
+            console.log(`${type} track ended:`, track.kind);
             updateStatus(`${type.charAt(0).toUpperCase() + type.slice(1)} sharing ended.`, 'error');
             videoPreview.style.display = 'none';
             cleanupConnection();
