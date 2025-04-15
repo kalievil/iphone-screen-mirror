@@ -170,6 +170,47 @@
       text-align: center;
       font-weight: bold;
     }
+    
+    .screen-sharing-demo {
+      margin-top: 20px;
+      background: #0070f3;
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      animation: pulse 2s infinite;
+    }
+    
+    .demo-title {
+      font-weight: bold;
+      font-size: 16px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    
+    .demo-step {
+      margin: 8px 0;
+      display: flex;
+      align-items: center;
+    }
+    
+    .demo-step:before {
+      content: "→";
+      margin-right: 8px;
+      font-weight: bold;
+    }
+    
+    .screen-recording-note {
+      background: rgba(255, 255, 255, 0.2);
+      padding: 10px;
+      border-radius: 5px;
+      margin: 15px 0;
+    }
+    
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 112, 243, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(0, 112, 243, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 112, 243, 0); }
+    }
   </style>
 </head>
 <body>
@@ -196,9 +237,11 @@
       <p>To share your iPhone screen:</p>
       <ol>
         <li>Make sure you're using Safari browser on iOS 15 or newer</li>
-        <li>Click "Share iPhone Screen" below</li>
-        <li>When prompted, tap "Screen" from the sharing options</li>
-        <li>Select "Start Broadcast" when ready</li>
+        <li>Follow these <strong>exact</strong> steps to share your entire iPhone screen:</li>
+        <li style="margin-left: 20px; font-weight: bold;">1. Swipe down from top-right corner to open Control Center</li>
+        <li style="margin-left: 20px; font-weight: bold;">2. Long press on the Screen Recording button (●)</li>
+        <li style="margin-left: 20px; font-weight: bold;">3. Select "Safari" from the list</li>
+        <li style="margin-left: 20px; font-weight: bold;">4. Tap "Start Broadcast"</li>
       </ol>
       <p><strong>Note:</strong> Screen sharing requires iOS 15+ and Safari browser.</p>
     </div>
@@ -293,6 +336,12 @@
         return;
       }
       
+      // Show iPhone-specific instructions upfront for iOS Safari users
+      if (isIOS && isSafari) {
+        iosInstructions.classList.remove('hidden');
+        updateStatus('Ready to connect. Use Control Center to share your screen.', 'pending');
+      }
+      
       try {
         updateStatus(`Initializing connection to peer ID: ${roomCode}...`, 'pending');
         console.log('Trying to connect to EXACT peer ID:', roomCode);
@@ -347,8 +396,26 @@
               if (isSafari) {
                 console.log("iOS Safari detected - enabling screen sharing");
                 iosInstructions.classList.remove('hidden');
-                shareScreenButton.classList.remove('hidden');
-                shareScreenButton.textContent = "Share iPhone Screen";
+                
+                // Update instructions to focus on Control Center method
+                updateStatus('To share your entire iPhone: Open Control Center → Screen Recording → Select Safari → Start Broadcast', 'connected');
+                
+                // Show Control Center animation if possible
+                const screenSharingDemo = document.createElement('div');
+                screenSharingDemo.className = 'screen-sharing-demo';
+                screenSharingDemo.innerHTML = `
+                  <div class="demo-title">How to share your entire iPhone screen:</div>
+                  <div class="demo-step">1. Swipe down from top-right</div>
+                  <div class="demo-step">2. Press & hold Screen Recording</div>
+                  <div class="demo-step">3. Select Safari</div>
+                  <div class="demo-step">4. Tap Start Broadcast</div>
+                `;
+                
+                const container = document.querySelector('.container');
+                container.appendChild(screenSharingDemo);
+                
+                // Don't show share screen button - instruct to use Control Center instead
+                shareScreenButton.classList.add('hidden');
               } else {
                 console.log("iOS but not Safari - showing warning");
                 updateStatus('Please open this link in Safari browser to share your screen', 'error');
@@ -394,113 +461,136 @@
     
     // Start screen sharing function
     async function startScreenSharing() {
+      // For iOS devices, we need to use the Control Center method
+      if (isIOS) {
+        tryIOSBroadcastExtension();
+        return;
+      }
+      
+      // For non-iOS devices (desktop browsers)
       try {
         updateStatus('Requesting screen sharing...', 'pending');
         
-        // Only allow iOS with Safari
-        if (!isIOSSafari) {
-          updateStatus('Screen sharing is only available on iOS using Safari browser.', 'error');
-          return;
-        }
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+          video: true,
+          audio: true
+        });
         
-        // Show instructions modal
-        safariModal.classList.remove('hidden');
-        
-        // Check if the required APIs are available for iOS 15.4+
-        if (navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
-          console.log("Using iOS getDisplayMedia API");
-          
-          try {
-            const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
-              video: {
-                frameRate: { ideal: 30, max: 60 },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
-              audio: true
-            });
-            
-            handleMediaStream(screenStream);
-          } catch (iosErr) {
-            console.error("iOS Safari getDisplayMedia error:", iosErr);
-            
-            if (iosErr.name === "NotAllowedError" || iosErr.name === "NotFoundError") {
-              console.log("Trying fallback method...");
-              tryIOSBroadcastExtension();
-            } else {
-              updateStatus("Screen sharing error: " + iosErr.message, 'error');
-              throw iosErr;
-            }
-          }
-        } else {
-          // Fallback for older iOS versions
-          console.log("getDisplayMedia not available, trying broadcast extension");
-          tryIOSBroadcastExtension();
-        }
-        
+        handleMediaStream(screenStream);
       } catch (err) {
         console.error('Screen sharing error:', err);
-        updateStatus('Screen sharing failed. Make sure you are using iOS 15+ and Safari browser.', 'error');
+        updateStatus('Screen sharing failed. Please try again.', 'error');
       }
     }
     
     // iOS ReplayKit broadcast extension fallback
     function tryIOSBroadcastExtension() {
-      try {
-        console.log("Attempting iOS broadcast extension method");
-        
-        // Update instructions for ReplayKit approach
-        updateStatus("To share your screen: open Control Center, tap Screen Recording, and hold to select this app", 'pending');
-        
-        // Create an audio context to receive the broadcast audio
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Show detailed instructions to the user
-        safariModal.querySelector('.safari-modal-content').innerHTML = `
-          <h2>iPhone Screen Sharing</h2>
-          <p>Follow these steps to share your screen:</p>
-          <ol>
-            <li>Swipe down from top-right corner to open Control Center</li>
-            <li>Long press the Screen Recording button (●)</li>
-            <li>Select "Safari" from the broadcast options</li>
-            <li>Tap "Start Broadcast"</li>
-          </ol>
-          <p><strong>To stop sharing:</strong> Tap the red status bar at top and select "Stop"</p>
-          <button id="modalCloseButton">Got it!</button>
-        `;
-        
-        // Reattach event listener to new button
-        document.getElementById('modalCloseButton').addEventListener('click', () => {
-          safariModal.classList.add('hidden');
-        });
-        
-        // Set up detection of broadcast starting
-        navigator.mediaDevices.addEventListener('devicechange', async () => {
-          console.log("Device change detected, checking for new streams...");
-          try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const hasNewVideoDevice = devices.some(device => 
-              device.kind === 'videoinput' && device.label.includes('Screen')
-            );
-            
-            if (hasNewVideoDevice) {
-              console.log("Potential screen broadcast device detected");
-              const stream = await navigator.mediaDevices.getUserMedia({ 
+      // Show the modal with Control Center instructions
+      safariModal.classList.remove('hidden');
+      
+      // Update instructions for ReplayKit approach
+      updateStatus("To share your entire iPhone screen, use Control Center Screen Recording", 'pending');
+      
+      // Show detailed instructions to the user
+      safariModal.querySelector('.safari-modal-content').innerHTML = `
+        <h2>Share Your Entire iPhone Screen</h2>
+        <p>Follow these steps <strong>exactly</strong>:</p>
+        <ol>
+          <li>Close this dialog (tap "Got it" below)</li>
+          <li>Swipe down from top-right corner to open Control Center</li>
+          <li>Long press on the Screen Recording button (●)</li>
+          <li>Select "Safari" from the options menu</li>
+          <li>Tap "Start Broadcast"</li>
+        </ol>
+        <div class="screen-recording-note">
+          <p><strong>Important:</strong> You MUST select Safari when prompted!</p>
+          <p>When you see a red recording bar at the top of your screen, your entire iPhone is being shared.</p>
+        </div>
+        <p><strong>To stop sharing:</strong> Tap the red bar at the top of your screen and select "Stop"</p>
+        <button id="modalCloseButton">Got it!</button>
+      `;
+      
+      // Reattach event listener to new button
+      document.getElementById('modalCloseButton').addEventListener('click', () => {
+        safariModal.classList.add('hidden');
+      });
+      
+      // Set up listeners to detect when the broadcast starts
+      setupBroadcastDetection();
+    }
+    
+    // Set up detection for when broadcast starts
+    function setupBroadcastDetection() {
+      // Listen for device changes which might indicate broadcast started
+      navigator.mediaDevices.addEventListener('devicechange', async () => {
+        console.log("Device change detected, checking for broadcast...");
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          console.log("Available devices:", devices.map(d => d.kind + ": " + d.label));
+          
+          // Check if we see any new video inputs, especially ones with "screen" in the name
+          const possibleScreenDevices = devices.filter(device => 
+            device.kind === 'videoinput' && 
+            (device.label.includes('screen') || 
+             device.label.includes('Screen') || 
+             device.label.includes('broadcast') || 
+             device.label.includes('Broadcast'))
+          );
+          
+          if (possibleScreenDevices.length > 0) {
+            console.log("Potential screen broadcast detected");
+            // Try to acquire the stream from the detected device
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                  deviceId: { ideal: devices.find(d => d.kind === 'videoinput' && d.label.includes('Screen')).deviceId }
+                  deviceId: { exact: possibleScreenDevices[0].deviceId }
                 }
               });
+              
+              // If we got a stream, handle it
               handleMediaStream(stream);
+            } catch (streamErr) {
+              console.error("Error acquiring stream from broadcast device:", streamErr);
             }
-          } catch (err) {
-            console.error("Error checking for broadcast devices:", err);
           }
-        });
-        
-      } catch (err) {
-        console.error("iOS broadcast extension error:", err);
-        updateStatus("Couldn't initiate screen sharing. Make sure you're using Safari on iOS 15+.", 'error');
-      }
+        } catch (err) {
+          console.error("Error checking for broadcast devices:", err);
+        }
+      });
+      
+      // Also periodically check for any screen/broadcast inputs
+      // This helps catch cases where devicechange event might not fire
+      const checkInterval = setInterval(async () => {
+        if (!currentStream) {  // Only if we don't already have a stream
+          try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const screenDevices = devices.filter(d => 
+              d.kind === 'videoinput' && 
+              (d.label.includes('Screen') || 
+               d.label.includes('screen') || 
+               d.label.includes('broadcast'))
+            );
+            
+            if (screenDevices.length > 0) {
+              console.log("Found screen device in periodic check:", screenDevices[0].label);
+              clearInterval(checkInterval);
+              
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                  video: { deviceId: { exact: screenDevices[0].deviceId } }
+                });
+                handleMediaStream(stream);
+              } catch (e) {
+                console.error("Could not get stream from detected screen device:", e);
+              }
+            }
+          } catch (e) {
+            console.error("Error in periodic device check:", e);
+          }
+        } else {
+          clearInterval(checkInterval);
+        }
+      }, 3000);
     }
     
     // Handle media stream
