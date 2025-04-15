@@ -174,7 +174,8 @@
       }
       
       try {
-        updateStatus('Initializing connection...', 'pending');
+        updateStatus(`Initializing connection to ${roomCode}...`, 'pending');
+        console.log('Attempting to connect to peer code:', roomCode);
         
         // Create PeerJS instance with default cloud server
         peer = new Peer(`sender_${Date.now()}`, {
@@ -187,18 +188,16 @@
           }
         });
 
-        console.log('Attempting to connect to peer:', roomCode);
-        
         peer.on('open', async (id) => {
-          console.log('PeerJS connected with ID:', id);
-          updateStatus('PeerJS connected. ID: ' + id, 'pending');
+          console.log('PeerJS connected with sender ID:', id);
+          updateStatus(`PeerJS connected with ID: ${id}. Connecting to ${roomCode}...`, 'pending');
           
           // Connect to the viewer peer
           connection = peer.connect(roomCode);
-          console.log('Connecting to viewer:', roomCode);
+          console.log('Attempting data connection to peer:', roomCode);
           
           connection.on('open', () => {
-            console.log('Data connection established');
+            console.log('Data connection established to', roomCode);
             updateStatus('Connected to viewer. Ready to share.', 'connected');
             
             // Send device info
@@ -220,11 +219,13 @@
           });
           
           connection.on('error', (err) => {
+            console.error('Connection error:', err);
             updateStatus(`Connection error: ${err.message}`, 'error');
             cleanupConnection();
           });
           
           connection.on('close', () => {
+            console.log('Connection closed');
             updateStatus('Connection closed.', 'error');
             cleanupConnection();
           });
